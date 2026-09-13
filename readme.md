@@ -200,4 +200,4 @@ Cualquier trabajo derivado de este proyecto deberá distribuirse bajo la misma l
 
 Consulta el archivo [`LICENSE`](LICENSE) en la raíz del repositorio para leer el texto completo de la licencia, o visita https://www.gnu.org/licenses/gpl-3.0.html.
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/alockgoy/proyecto_final_2daw)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/aloxvim/proyecto_final_2daw)
