@@ -62,7 +62,7 @@ class Install
         $stmt = "CREATE TABLE IF NOT EXISTS Movies(
     id_movie INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
-    synopsis VARCHAR(600),
+    synopsis VARCHAR(1500),
     poster VARCHAR(255) NOT NULL,
     director VARCHAR(100) NOT NULL,
     gender VARCHAR(200) NOT NULL,
