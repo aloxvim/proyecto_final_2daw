@@ -92,6 +92,20 @@ No me extenderé mucho porque el propósito de esta aplicación se puede leer en
 
 En España no es ilegal hacer una copia de seguridad **personal** de un DVD comprado legalmente. Dicha copia, dependiendo del formato y calidad con que se haga, tendrá diferentes parámetros según el usuario que <u>no</u> se pueden autorellenar con el uso de la API.
 
+### 📁 Permisos de las carpetas de imágenes
+
+Los pósters y las fotos de perfil se guardan en `img/portadas_peliculas`, `img/portadas_series` e `img/avatares_usuarios`. Al clonar el repositorio estas carpetas pertenecen a tu usuario, pero PHP se ejecuta como el usuario del servidor web, que no puede escribir en ellas, así que la subida de imágenes falla.
+
+Para solucionarlo, ejecuta desde la raíz del proyecto:
+
+```bash
+sudo chown -R www-data:www-data img/portadas_peliculas img/portadas_series img/avatares_usuarios
+```
+
+> `www-data` es el usuario de Apache en Debian/Ubuntu y en las imágenes Docker oficiales de PHP/Apache. En otras distribuciones puede ser `apache` (Fedora/RHEL) o `http` (Arch).
+
+---
+
 ### 🛠️ Resto de la configuración
 
 Una vez configurados los apartados anteriores, se puede abrir la aplicación.  
