@@ -28,49 +28,139 @@ if (!$userId) {
 $message = '';
 $messageType = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['backup_file'])) {
+/**
+ * Convierte un valor de php.ini ("200M", "8M", "1G"...) a bytes
+ */
+function iniABytes($valor)
+{
+    $valor = trim((string) $valor);
+    if ($valor === '' || $valor === '-1') {
+        return PHP_INT_MAX;
+    }
+    $numero = (float) $valor;
+    switch (strtolower(substr($valor, -1))) {
+        case 'g': $numero *= 1024;
+        case 'm': $numero *= 1024;
+        case 'k': $numero *= 1024;
+    }
+    return (int) $numero;
+}
+
+/**
+ * Formatea bytes en MB legibles
+ */
+function formatearMB($bytes)
+{
+    return number_format($bytes / 1048576, 1, ',', '.') . ' MB';
+}
+
+/**
+ * Mensaje legible para los códigos de error de subida de PHP
+ */
+function mensajeErrorSubida($codigo, $limiteTexto)
+{
+    switch ($codigo) {
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:
+            return "El archivo supera el tamaño máximo permitido por el servidor ($limiteTexto).";
+        case UPLOAD_ERR_PARTIAL:
+            return "El archivo solo se ha subido parcialmente. Inténtalo de nuevo.";
+        case UPLOAD_ERR_NO_FILE:
+            return "No se ha recibido ningún archivo.";
+        case UPLOAD_ERR_NO_TMP_DIR:
+        case UPLOAD_ERR_CANT_WRITE:
+        case UPLOAD_ERR_EXTENSION:
+            return "El servidor no ha podido guardar el archivo subido (código $codigo).";
+        default:
+            return "Error desconocido al subir el archivo (código $codigo).";
+    }
+}
+
+// Tamaño máximo real que acepta el servidor (el menor de los dos límites)
+$limiteSubida = min(iniABytes(ini_get('upload_max_filesize')), iniABytes(ini_get('post_max_size')));
+$limiteSubidaTexto = formatearMB($limiteSubida);
+
+// ¿La petición viene del indicador de progreso (JavaScript)?
+$esAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $movementController = new MovementController();
+    $exito = false;
+
+    // Si el envío supera post_max_size, PHP vacía $_POST y $_FILES sin avisar
+    if (empty($_POST) && empty($_FILES) && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+        $message = "El archivo (" . formatearMB((int) $_SERVER['CONTENT_LENGTH']) . ") supera el tamaño máximo "
+            . "permitido por el servidor ($limiteSubidaTexto). No se ha importado nada.";
+        $messageType = 'danger';
 
     // Validar CSRF
-    if (!isset($_POST['csrf_token']) || !validarTokenCSRF($_POST['csrf_token'])) {
-        header('Location: import_backup.php?error=csrf');
-        exit();
+    } elseif (!isset($_POST['csrf_token']) || !validarTokenCSRF($_POST['csrf_token'])) {
+        if (!$esAjax) {
+            header('Location: import_backup.php?error=csrf');
+            exit();
+        }
+        $message = "<strong>Error de seguridad:</strong> Token CSRF inválido. Por favor, recarga la página e intenta de nuevo.";
+        $messageType = 'danger';
+
+    } else {
+        // Regenerar token
+        regenerarTokenCSRF();
+
+        if (!isset($_FILES['backup_file'])) {
+            $message = mensajeErrorSubida(UPLOAD_ERR_NO_FILE, $limiteSubidaTexto);
+            $messageType = 'danger';
+        } elseif ($_FILES['backup_file']['error'] !== UPLOAD_ERR_OK) {
+            $message = mensajeErrorSubida($_FILES['backup_file']['error'], $limiteSubidaTexto);
+            $messageType = 'danger';
+        } else {
+            $backupController = new BackupController();
+            $result = $backupController->importBackup($userId, $_FILES['backup_file']);
+
+            if ($result['success']) {
+                $exito = true;
+                $movementController->addMovement(
+                    $_SESSION['username'],
+                    "ha importado una copia de seguridad ({$result['imported_movies']} películas, {$result['imported_series']} series)",
+                    date('Y-m-d H:i:s'),
+                    "correcto"
+                );
+
+                $message = "Backup importado correctamente. ";
+                $message .= "Películas importadas: {$result['imported_movies']}, ";
+                $message .= "Series importadas: {$result['imported_series']}";
+
+                if (!empty($result['errors'])) {
+                    $message .= "<br><strong>Advertencias:</strong><br>"
+                        . implode("<br>", array_map('htmlspecialchars', $result['errors']));
+                }
+
+                $messageType = 'success';
+            } else {
+                $message = htmlspecialchars($result['message'] ?? 'Error al importar el backup');
+                $messageType = 'danger';
+            }
+        }
     }
 
-    // Regenerar token
-    regenerarTokenCSRF();
-
-    $backupController = new BackupController();
-    $movementController = new MovementController();
-
-    $result = $backupController->importBackup($userId, $_FILES['backup_file']);
-
-    if ($result['success']) {
-        $movementController->addMovement(
-            $_SESSION['username'],
-            "ha importado una copia de seguridad ({$result['imported_movies']} películas, {$result['imported_series']} series)",
-            date('Y-m-d H:i:s'),
-            "correcto"
-        );
-
-        $message = "Backup importado correctamente. ";
-        $message .= "Películas importadas: {$result['imported_movies']}, ";
-        $message .= "Series importadas: {$result['imported_series']}";
-
-        if (!empty($result['errors'])) {
-            $message .= "<br><strong>Advertencias:</strong><br>" . implode("<br>", $result['errors']);
-        }
-
-        $messageType = 'success';
-    } else {
+    if (!$exito) {
         $movementController->addMovement(
             $_SESSION['username'],
             "ha intentado importar una copia de seguridad",
             date('Y-m-d H:i:s'),
             "fallido"
         );
+    }
 
-        $message = $result['message'] ?? 'Error al importar el backup';
-        $messageType = 'danger';
+    // Respuesta para el indicador de progreso
+    if ($esAjax) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => $exito,
+            'type' => $messageType,
+            'message' => $message,
+            'csrf_token' => generarTokenCSRF()
+        ], JSON_UNESCAPED_UNICODE);
+        exit();
     }
 }
 ?>
@@ -164,11 +254,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['backup_file'])) {
                                 </label>
                                 <input type="file" class="form-control" id="backup_file" name="backup_file"
                                     accept=".json" required>
-                                <div class="form-text">Solo se aceptan archivos JSON de backup</div>
+                                <div class="form-text">
+                                    Solo se aceptan archivos JSON de backup. Tamaño máximo: <?php echo $limiteSubidaTexto; ?>
+                                </div>
+                            </div>
+
+                            <!-- Indicador de estado de la importación -->
+                            <div id="importStatus" class="mb-3 d-none" aria-live="polite">
+                                <div id="importStatusText" class="mb-2"></div>
+                                <div class="progress" style="height: 1.5rem;" id="importProgressWrap">
+                                    <div id="importProgressBar" class="progress-bar" role="progressbar"
+                                        style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                </div>
                             </div>
 
                             <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary btn-lg">
+                                <button type="submit" class="btn btn-primary btn-lg" id="importSubmitBtn">
                                     <i class="fas fa-upload me-2"></i>Importar Backup
                                 </button>
                                 <a href="my_profile.php" class="btn btn-secondary">
@@ -198,6 +299,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['backup_file'])) {
             }
 
             const form = this;
+
+            // Comprobar el tamaño antes de subir nada
+            if (file.size > LIMITE_SUBIDA) {
+                mostrarEstado('danger',
+                    `<i class="fas fa-times-circle me-2"></i>El archivo (${formatearMB(file.size)}) supera el tamaño máximo ` +
+                    `permitido por el servidor (${formatearMB(LIMITE_SUBIDA)}). No se ha importado nada.`);
+                return;
+            }
 
             // Crear el modal
             const modalHtml = `
@@ -247,14 +356,155 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['backup_file'])) {
             // Manejar confirmación
             document.getElementById('confirmImportBtn').addEventListener('click', function () {
                 modal.hide();
-                // Enviar el formulario real
-                form.submit();
+                // Enviar el formulario con indicador de progreso
+                enviarConProgreso(form);
             });
 
             // Limpiar modal cuando se cierre
             document.getElementById('importConfirmModal').addEventListener('hidden.bs.modal', function () {
                 this.remove();
             });
+        });
+
+        // ---------- Indicador de estado de la importación ----------
+
+        const LIMITE_SUBIDA = <?php echo json_encode($limiteSubida); ?>;
+        const statusBox = document.getElementById('importStatus');
+        const statusText = document.getElementById('importStatusText');
+        const progressWrap = document.getElementById('importProgressWrap');
+        const progressBar = document.getElementById('importProgressBar');
+        const submitBtn = document.getElementById('importSubmitBtn');
+        const fileInput = document.getElementById('backup_file');
+        let importEnCurso = false;
+
+        function formatearMB(bytes) {
+            return (bytes / 1048576).toLocaleString('es-ES', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' MB';
+        }
+
+        // tipo: 'info' (en curso), 'success' o 'danger'
+        function mostrarEstado(tipo, html, progreso = null) {
+            statusBox.classList.remove('d-none');
+            statusText.className = 'alert mb-2 alert-' + tipo;
+            statusText.innerHTML = html;
+
+            if (progreso === null) {
+                progressWrap.classList.add('d-none');
+                return;
+            }
+            progressWrap.classList.remove('d-none');
+            progressBar.className = 'progress-bar';
+
+            if (progreso === 'indeterminado') {
+                progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+                progressBar.style.width = '100%';
+                progressBar.textContent = 'Procesando...';
+            } else {
+                progressBar.style.width = progreso + '%';
+                progressBar.setAttribute('aria-valuenow', progreso);
+                progressBar.textContent = progreso + '%';
+            }
+        }
+
+        function bloquearFormulario(bloquear) {
+            importEnCurso = bloquear;
+            submitBtn.disabled = bloquear;
+            fileInput.disabled = bloquear;
+            submitBtn.innerHTML = bloquear
+                ? '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Importando...'
+                : '<i class="fas fa-upload me-2"></i>Importar Backup';
+        }
+
+        function finalizarConError(html) {
+            bloquearFormulario(false);
+            mostrarEstado('danger', '<i class="fas fa-times-circle me-2"></i>' + html);
+        }
+
+        function enviarConProgreso(form) {
+            // FormData se crea antes de deshabilitar el input (los campos deshabilitados no se envían)
+            const datos = new FormData(form);
+            const xhr = new XMLHttpRequest();
+
+            bloquearFormulario(true);
+            mostrarEstado('info', '<i class="fas fa-cloud-upload-alt me-2"></i>Preparando la subida...', 0);
+
+            xhr.upload.addEventListener('progress', function (e) {
+                if (!e.lengthComputable) return;
+                const pct = Math.floor((e.loaded / e.total) * 100);
+                mostrarEstado('info',
+                    `<i class="fas fa-cloud-upload-alt me-2"></i>Subiendo archivo... ` +
+                    `(${formatearMB(e.loaded)} de ${formatearMB(e.total)})`, pct);
+            });
+
+            xhr.upload.addEventListener('load', function () {
+                mostrarEstado('info',
+                    '<i class="fas fa-cog fa-spin me-2"></i>Archivo subido. Importando películas y series en el servidor, ' +
+                    'esto puede tardar un rato. <strong>No cierres ni recargues la página.</strong>', 'indeterminado');
+            });
+
+            xhr.addEventListener('load', function () {
+                let respuesta = null;
+                try {
+                    respuesta = JSON.parse(xhr.responseText);
+                } catch (err) {
+                    // Respuesta no JSON: error fatal de PHP, tiempo agotado, etc.
+                }
+
+                if (!respuesta) {
+                    finalizarConError(`El servidor ha devuelto un error inesperado (HTTP ${xhr.status}). ` +
+                        'Revisa el log de errores de Apache. Puede que parte del backup se haya importado.');
+                    return;
+                }
+
+                // Actualizar el token CSRF para poder reintentar sin recargar
+                const campoToken = form.querySelector('input[name="csrf_token"]');
+                if (campoToken && respuesta.csrf_token) {
+                    campoToken.value = respuesta.csrf_token;
+                }
+
+                if (!respuesta.success) {
+                    finalizarConError(respuesta.message || 'Error al importar el backup');
+                    return;
+                }
+
+                importEnCurso = false;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fas fa-check me-2"></i>Importado';
+
+                let segundos = 5;
+                mostrarEstado('success',
+                    '<i class="fas fa-check-circle me-2"></i>' + respuesta.message +
+                    `<br><small>Redirigiendo a Mi Perfil en <strong id="countdown">${segundos}</strong> segundos...</small>`);
+
+                const intervalo = setInterval(() => {
+                    segundos--;
+                    document.getElementById('countdown').textContent = segundos;
+                    if (segundos <= 0) {
+                        clearInterval(intervalo);
+                        window.location.href = 'my_profile.php';
+                    }
+                }, 1000);
+            });
+
+            xhr.addEventListener('error', function () {
+                finalizarConError('Se ha perdido la conexión con el servidor durante la importación. ' +
+                    'Comprueba la red; puede que parte del backup se haya importado.');
+            });
+
+            xhr.addEventListener('abort', function () {
+                finalizarConError('La importación se ha cancelado.');
+            });
+
+            xhr.open('POST', window.location.pathname);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            xhr.send(datos);
+        }
+
+        // Avisar si se intenta salir de la página durante la importación
+        window.addEventListener('beforeunload', function (e) {
+            if (importEnCurso) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
         });
     </script>
 </body>

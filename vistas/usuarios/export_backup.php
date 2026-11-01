@@ -24,18 +24,34 @@ if (!$userId) {
     exit();
 }
 
-// Registrar movimiento
 $movementController = new MovementController();
-$movementController->addMovement(
-    $_SESSION['username'], 
-    "ha exportado una copia de seguridad completa", 
-    date('Y-m-d H:i:s'), 
-    "correcto"
-);
+$username = $_SESSION['username'];
+
+// Resultado de la exportación: null mientras no ha terminado.
+// Si el script muere a mitad (p. ej. un error fatal), se queda en null
+// y la función de cierre lo registra como fallido.
+$exportResult = null;
+
+register_shutdown_function(function () use (&$exportResult, $movementController, $username) {
+    $ok = ($exportResult === true);
+    $movementController->addMovement(
+        $username,
+        $ok ? "ha exportado una copia de seguridad completa"
+            : "ha intentado exportar una copia de seguridad completa",
+        date('Y-m-d H:i:s'),
+        $ok ? "correcto" : "fallido"
+    );
+});
 
 // Crear instancia del controlador de backup
 $backupController = new BackupController();
 
-// Exportar backup
-$backupController->exportBackup($userId);
+// Exportar backup (el movimiento se registra al terminar, según el resultado)
+$exportResult = $backupController->exportBackup($userId);
+
+if ($exportResult === false && !headers_sent()) {
+    http_response_code(500);
+    echo "No se ha podido exportar la copia de seguridad.";
+}
+exit();
 ?>

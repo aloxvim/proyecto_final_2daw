@@ -20,81 +20,107 @@ class BackupController
 
     /**
      * Exportar backup completo del usuario
+     *
+     * El JSON se envía al navegador por partes (elemento a elemento) en lugar
+     * de construirse entero en memoria, para que el consumo de memoria no
+     * dependa del número ni del tamaño de las portadas.
+     *
+     * Devuelve true si la exportación se completó y false si hubo un error.
      */
     public function exportBackup($userId)
     {
+        $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+
         try {
             // Obtener todas las películas y series del usuario
             $movies = $this->movieController->getMoviesByUserId($userId);
             $series = $this->serieController->getSeriesByUserId($userId);
 
-            // Crear estructura de datos
-            $backupData = [
-                'version' => '1.0',
-                'export_date' => date('Y-m-d H:i:s'),
-                'user_id' => $userId,
-                'movies' => [],
-                'series' => []
-            ];
+            // La exportación puede tardar si hay muchas portadas
+            set_time_limit(0);
 
-            // Procesar películas
-            foreach ($movies as $movie) {
-                $movieData = $movie;
-                
-                // Leer el archivo de imagen y convertirlo a base64
-                if (!empty($movie['poster'])) {
-                    $posterPath = __DIR__ . '/../../' . $movie['poster'];
-                    if (file_exists($posterPath)) {
-                        $imageData = file_get_contents($posterPath);
-                        $movieData['poster_data'] = base64_encode($imageData);
-                        $movieData['poster_extension'] = pathinfo($movie['poster'], PATHINFO_EXTENSION);
-                    }
-                }
-                
-                $backupData['movies'][] = $movieData;
-            }
-
-            // Procesar series
-            foreach ($series as $serie) {
-                $serieData = $serie;
-                
-                // Leer el archivo de imagen y convertirlo a base64
-                if (!empty($serie['poster'])) {
-                    $posterPath = __DIR__ . '/../../' . $serie['poster'];
-                    if (file_exists($posterPath)) {
-                        $imageData = file_get_contents($posterPath);
-                        $serieData['poster_data'] = base64_encode($imageData);
-                        $serieData['poster_extension'] = pathinfo($serie['poster'], PATHINFO_EXTENSION);
-                    }
-                }
-                
-                $backupData['series'][] = $serieData;
-            }
-
-            // Convertir a JSON
-            $jsonData = json_encode($backupData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-
-            if ($jsonData === false) {
-                throw new Exception("Error al generar el archivo de backup");
+            // Desactivar buffers de salida para que los datos se envíen según se generan
+            while (ob_get_level() > 0) {
+                ob_end_clean();
             }
 
             // Crear nombre de archivo
             $filename = 'backup_' . date('Y-m-d_H-i-s') . '.json';
 
-            // Enviar headers para descarga
+            // Enviar headers para descarga (sin Content-Length: el tamaño no se conoce de antemano)
             header('Content-Type: application/json');
             header('Content-Disposition: attachment; filename="' . $filename . '"');
-            header('Content-Length: ' . strlen($jsonData));
             header('Cache-Control: no-cache, must-revalidate');
             header('Pragma: no-cache');
 
-            echo $jsonData;
-            exit();
+            // Cabecera del backup (misma estructura que antes)
+            echo '{';
+            echo '"version":' . json_encode('1.0') . ',';
+            echo '"export_date":' . json_encode(date('Y-m-d H:i:s')) . ',';
+            echo '"user_id":' . json_encode($userId) . ',';
+
+            // Películas
+            echo '"movies":[';
+            $this->streamItems($movies, $jsonFlags);
+            unset($movies);
+            echo '],';
+
+            // Series
+            echo '"series":[';
+            $this->streamItems($series, $jsonFlags);
+            unset($series);
+            echo ']';
+
+            echo '}';
+            flush();
+
+            return true;
 
         } catch (Exception $e) {
             $this->lastError = "Error al exportar backup: " . $e->getMessage();
             error_log($this->lastError);
             return false;
+        }
+    }
+
+    /**
+     * Codifica y envía cada elemento (película o serie) con su portada en base64,
+     * liberando la memoria de cada uno antes de pasar al siguiente.
+     */
+    private function streamItems($items, $jsonFlags)
+    {
+        $first = true;
+
+        foreach ($items as $item) {
+            $itemData = $item;
+
+            // Leer el archivo de imagen y convertirlo a base64
+            if (!empty($item['poster'])) {
+                $posterPath = __DIR__ . '/../../' . $item['poster'];
+                if (file_exists($posterPath)) {
+                    $imageData = file_get_contents($posterPath);
+                    $itemData['poster_data'] = base64_encode($imageData);
+                    $itemData['poster_extension'] = pathinfo($item['poster'], PATHINFO_EXTENSION);
+                    unset($imageData);
+                }
+            }
+
+            $json = json_encode($itemData, $jsonFlags);
+            unset($itemData);
+
+            if ($json === false) {
+                throw new Exception("Error al generar el archivo de backup: " . json_last_error_msg()
+                    . " (elemento '" . ($item['name'] ?? 'desconocido') . "')");
+            }
+
+            if (!$first) {
+                echo ',';
+            }
+            echo $json;
+            unset($json);
+            flush();
+
+            $first = false;
         }
     }
 
