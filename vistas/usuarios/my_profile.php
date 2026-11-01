@@ -475,43 +475,10 @@ if (isset($_POST['ask_for_admin'])) {
                     <?php
                     if ($userRol != "propietario") {
                         ?>
-                        <form method="POST" action="delete_user.php" style="display:inline;" id="deleteAccountForm">
-                            <?php echo campoTokenCSRF(); ?>
-                            <input type="hidden" name="id" value="<?php echo $userData['id_user']; ?>">
-                            <button type="button" class="btn btn-danger" data-bs-toggle="modal"
-                                data-bs-target="#deleteAccountModal">
-                                <i class="fas fa-trash-alt"></i> Borrar cuenta
-                            </button>
-                        </form>
-
-                        <!-- Modal de confirmación para eliminar cuenta -->
-                        <div class="modal fade" id="deleteAccountModal" tabindex="-1"
-                            aria-labelledby="deleteAccountModalLabel" aria-hidden="true" data-bs-theme="dark">
-                            <div class="modal-dialog">
-                                <div class="modal-content">
-                                    <div class="modal-header">
-                                        <h5 class="modal-title text-light" id="deleteAccountModalLabel">
-                                            Confirmar eliminación de cuenta
-                                        </h5>
-                                        <button type="button" class="btn-close" data-bs-dismiss="modal"
-                                            aria-label="Close"></button>
-                                    </div>
-                                    <div class="modal-body text-light">
-                                        <p><strong>¿Estás seguro de que deseas eliminar tu cuenta?</strong></p>
-                                        <p class="text mb-0">Esta acción no se puede deshacer.</p>
-                                    </div>
-                                    <div class="modal-footer">
-                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                                            Cancelar
-                                        </button>
-                                        <button type="button" class="btn btn-danger"
-                                            onclick="document.getElementById('deleteAccountForm').submit();">
-                                            Borrar cuenta
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <!-- El borrado pide contraseña y dos confirmaciones (ver delete_user.php) -->
+                        <a class="btn btn-danger" href="./delete_user.php" style="text-decoration: none;">
+                            <i class="fas fa-trash-alt"></i> Borrar cuenta
+                        </a>
                         <?php
                     }
                     ?>
